@@ -1,28 +1,28 @@
-import json
 import sys
 import logging
 import requests
 from kubernetes import client, config
 
-# Configure logging
+# Check if log mode is enabled from arguments
+LOG_MODE = "--log" in sys.argv
+
+# Configure logging only if log mode is enabled
 LOG_FILE = "sre_cli.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
-)
+if LOG_MODE:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()]
+    )
 
 # Load Kubernetes config
 def load_kube_config():
     """Loads the Kubernetes configuration from ~/.kube/config"""
     try:
         config.load_kube_config()
-        logging.info("Successfully loaded Kubernetes configuration.")
+        log_and_print("INFO", "Successfully loaded Kubernetes configuration.", "✅")
     except Exception as e:
-        logging.error(f"Error loading Kubernetes config: {e}")
+        log_and_print("ERROR", f"Error loading Kubernetes config: {e}", "❌")
         sys.exit(1)
 
 # Kubernetes API Clients
@@ -31,65 +31,92 @@ def get_k8s_clients():
     load_kube_config()
     return client.AppsV1Api(), client.CoreV1Api()
 
+# Logging and Printing in one function
+def log_and_print(level, message, icon=""):
+    """Handles logging and printing correctly based on --log mode"""
+    log_message = message
+
+    if LOG_MODE:
+        # In log mode, log everything and print logs instead of normal output
+        match level:
+            case "INFO" | "WARNING" | "ERROR":
+                getattr(logging, level.lower())(log_message)
+            case _:
+                logging.debug(f"Unknown log level: {log_message}")
+    else:
+        # Normal mode: Print messages with icons, but do not log to file
+        print(f"{icon}  {message}")
+
 # List Deployments
 def list_deployments(namespace=None):
-    """Lists all deployments in the specified namespace or across all namespaces if none is provided"""
+    """Lists all deployments in the specified namespace or across all namespaces"""
     v1_apps, _ = get_k8s_clients()
     try:
-        deployments = v1_apps.list_namespaced_deployment(
-            namespace) if namespace else v1_apps.list_deployment_for_all_namespaces()
+        deployments = v1_apps.list_namespaced_deployment(namespace) if namespace else v1_apps.list_deployment_for_all_namespaces()
         for dep in deployments.items:
-            logging.info(f"Deployment: {dep.metadata.name}, Namespace: {dep.metadata.namespace}")
+            log_and_print("INFO", f"Deployment: {dep.metadata.name} (Namespace: {dep.metadata.namespace})", "📦")
     except client.exceptions.ApiException as e:
-        logging.error(f"Error listing deployments: {e.reason}")
+        log_and_print("ERROR", f"Error listing deployments: {e.reason}", "❌")
     except Exception as e:
-        logging.error(f"Unexpected error: {e}")
+        log_and_print("ERROR", f"Unexpected error: {e}", "❌")
 
 # Scale Deployment
 def scale_deployment(deployment, replicas, namespace=None):
     """Scales a deployment and logs the operation"""
     v1_apps, _ = get_k8s_clients()
-
     try:
         if namespace:
             dep = v1_apps.read_namespaced_deployment(deployment, namespace)
             dep.spec.replicas = replicas
             v1_apps.patch_namespaced_deployment_scale(deployment, namespace, dep)
-            logging.info(f"Scaled {deployment} to {replicas} replicas in namespace {namespace}")
+            log_and_print("INFO", f"Scaled {deployment} to {replicas} replicas in namespace {namespace}", "📈")
         else:
             all_deployments = v1_apps.list_deployment_for_all_namespaces()
             matched_deployments = [dep for dep in all_deployments.items if dep.metadata.name == deployment]
 
             if not matched_deployments:
-                logging.warning(f"Deployment '{deployment}' not found in any namespace.")
+                log_and_print("WARNING", f"Deployment '{deployment}' not found in any namespace.", "⚠️")
                 return
 
             for dep in matched_deployments:
                 ns = dep.metadata.namespace
                 dep.spec.replicas = replicas
                 v1_apps.patch_namespaced_deployment_scale(deployment, ns, dep)
-                logging.info(f"Scaled {deployment} to {replicas} replicas in namespace {ns}")
+                log_and_print("INFO", f"Scaled {deployment} to {replicas} replicas in namespace {ns}", "📈")
 
     except client.exceptions.ApiException as e:
-        logging.error(f"Error scaling deployment: {e.reason}")
+        log_and_print("ERROR", f"Error scaling deployment: {e.reason}", "❌")
     except Exception as e:
-        logging.error(f"Unexpected error: {e}")
+        log_and_print("ERROR", f"Unexpected error: {e}", "❌")
 
 # Get Deployment Info
 def get_deployment_info(deployment, namespace=None):
     """Retrieves and prints detailed information about a deployment."""
-    try:
-        v1_apps = client.AppsV1Api()
 
+    v1_apps, _ = get_k8s_clients()
+
+    try:
         if namespace:
+            # Fetch deployment from a specific namespace
             dep = v1_apps.read_namespaced_deployment(deployment, namespace)
         else:
-            all_deployments = v1_apps.list_deployment_for_all_namespaces()
-            dep = next((d for d in all_deployments.items if d.metadata.name == deployment), None)
-            if not dep:
-                logging.warning(f"Deployment '{deployment}' not found in any namespace.")
+            # ✅ Fix: Handle failure when querying all namespaces
+            try:
+                all_deployments = v1_apps.list_deployment_for_all_namespaces()
+                dep = next((d for d in all_deployments.items if d.metadata.name == deployment), None)
+                if not dep:
+                    log_and_print("WARNING", f"Deployment '{deployment}' not found in any namespace.", "⚠️")
+                    return
+                namespace = dep.metadata.namespace
+            except client.exceptions.ApiException as e:
+                if e.status == 403:
+                    log_and_print("ERROR", "Permission denied: Cannot access all namespaces.", "🚫")
+                else:
+                    log_and_print("ERROR", f"Kubernetes API Error: {e.reason}", "❌")
                 return
-            namespace = dep.metadata.namespace  # Set namespace for display
+            except Exception as e:
+                log_and_print("ERROR", f"Unexpected error retrieving deployments: {e}", "❌")
+                return
 
         dep_info = {
             "Deployment Name": dep.metadata.name,
@@ -100,22 +127,29 @@ def get_deployment_info(deployment, namespace=None):
             "Creation Timestamp": dep.metadata.creation_timestamp,
             "Labels": dep.metadata.labels or {},
             "Annotations": dep.metadata.annotations or {},
+            "Images": [container.image for container in dep.spec.template.spec.containers],
         }
 
-        logging.info(f"Deployment Info Retrieved: {json.dumps(dep_info, indent=4, default=str)}")
+        log_and_print("INFO", f"--- Deployment Info: {dep.metadata.name} ---", "\n🛠")
+        for key, value in dep_info.items():
+            log_and_print("INFO", f"{key}: {value}", "📌")
 
     except requests.exceptions.ConnectionError:
-        logging.error("Error: Could not connect to the Kubernetes API. Is the cluster running?")
+        log_and_print("ERROR", "Could not connect to the Kubernetes API. Is your cluster running?", "❌")
     except client.exceptions.ApiException as e:
-        logging.error(f"Kubernetes API Error: {e.reason}")
+        if e.status == 404:
+            log_and_print("WARNING", f"Deployment '{deployment}' not found in namespace '{namespace}'.", "⚠️")
+        elif e.status == 403:
+            log_and_print("ERROR", f"Permission denied: Cannot access deployment '{deployment}' in namespace '{namespace}'.", "🚫")
+        else:
+            log_and_print("ERROR", f"Kubernetes API Error: {e.reason}", "❌")
     except Exception as e:
-        logging.error(f"Unexpected error: {e}")
+        log_and_print("ERROR", f"Unexpected error: {e}", "❌")
 
 
-# Diagnose Deployment
 def diagnose_deployment(deployment, namespace=None, pod_diagnostics=False):
     """
-    Diagnoses a deployment's health using best Kubernetes debugging practices.
+    Diagnoses a deployment's health using the best Kubernetes logging practices.
 
     - Always checks Deployment, ReplicaSets, and general pod statuses.
     - Identifies deployment-wide failures (`ImagePullBackOff`, `CrashLoopBackOff`).
@@ -137,37 +171,37 @@ def diagnose_deployment(deployment, namespace=None, pod_diagnostics=False):
             all_deployments = v1_apps.list_deployment_for_all_namespaces()
             dep = next((d for d in all_deployments.items if d.metadata.name == deployment), None)
             if not dep:
-                logging.warning(f"Deployment '{deployment}' not found in any namespace.")
+                log_and_print("WARNING", f"Deployment '{deployment}' not found in any namespace.", "⚠️")
                 return
             namespace = dep.metadata.namespace
 
-        logging.info(f"\n--- Deployment Diagnosis: {dep.metadata.name} ---")
-        logging.info(f"Namespace: {namespace}")
-        logging.info(f"Desired Replicas: {dep.spec.replicas}")
-        logging.info(f"Available Replicas: {dep.status.available_replicas or 0}")
-        logging.info(f"Unavailable Replicas: {dep.spec.replicas - (dep.status.available_replicas or 0)}")
+        log_and_print("INFO", f"--- Deployment Diagnosis: {dep.metadata.name} ---", "\n🔍")
+        log_and_print("INFO", f"Namespace: {namespace}", "📍")
+        log_and_print("INFO", f"Desired Replicas: {dep.spec.replicas}", "🔢")
+        log_and_print("INFO", f"Available Replicas: {dep.status.available_replicas or 0}", "✅")
+        log_and_print("INFO", f"Unavailable Replicas: {dep.spec.replicas - (dep.status.available_replicas or 0)}", "❌")
 
         # Get Deployment Conditions
         conditions = dep.status.conditions or []
         for condition in conditions:
-            logging.info(f"   Condition: {condition.type} | Status: {condition.status} | Message: {condition.message}")
+            log_and_print("INFO", f"Condition: {condition.type} | Status: {condition.status} | Message: {condition.message}", "⚠")
 
         # 2️⃣ CHECK REPLICASETS
         replicasets = v1_apps.list_namespaced_replica_set(namespace).items
         matched_replicasets = [rs for rs in replicasets if rs.metadata.owner_references and rs.metadata.owner_references[0].name == deployment]
 
-        logging.info("\n--- ReplicaSets ---")
+        log_and_print("INFO", "--- ReplicaSets ---", "\n🔄")
         for rs in matched_replicasets:
-            logging.info(f"ReplicaSet: {rs.metadata.name} | Ready Replicas: {rs.status.ready_replicas or 0}/{rs.status.replicas}")
+            log_and_print("INFO", f"ReplicaSet: {rs.metadata.name} | Ready Replicas: {rs.status.ready_replicas or 0}/{rs.status.replicas}", "📦")
 
         # 3️⃣ CHECK POD STATUS (Only if --pod is enabled)
         if pod_diagnostics:
             pods = v1_core.list_namespaced_pod(namespace).items
             related_pods = [pod for pod in pods if pod.metadata.name.startswith(f"{deployment}-")]
 
-            logging.info("\n--- Pod Status ---")
+            log_and_print("INFO", "--- Pod Status ---", "\n🟢")
             for pod in related_pods:
-                logging.info(f"Pod: {pod.metadata.name} | Status: {pod.status.phase}")
+                log_and_print("INFO", f"Pod: {pod.metadata.name} | Status: {pod.status.phase}", "🔹")
 
             # Detect Failing Pods (Only if --pod is enabled)
             failed_pods = []
@@ -181,33 +215,33 @@ def diagnose_deployment(deployment, namespace=None, pod_diagnostics=False):
                         })
 
             if failed_pods:
-                logging.warning("\n--- Deployment-Wide Issues Detected ---")
+                log_and_print("WARNING", "--- Deployment-Wide Issues Detected ---", "\n❌")
                 for pod in failed_pods:
-                    logging.warning(f"   Pod: {pod['Pod']}")
-                    logging.warning(f"   Failure Reason: {pod['Reason']}")
-                    logging.warning(f"   Message: {pod['Message']}")
+                    log_and_print("WARNING", f"   Pod: {pod['Pod']}", "🔴")
+                    log_and_print("WARNING", f"   Failure Reason: {pod['Reason']}", "❌")
+                    log_and_print("WARNING", f"   Message: {pod['Message']}", "📝")
 
             # 4️⃣ CHECK POD EVENTS & LOGS (Only if --pod is enabled)
             try:
                 events = v1_core.list_namespaced_event(namespace).items
 
                 if not events:
-                    logging.info("\n--- Pod Events (Latest First) ---")
-                    logging.info("ℹ No events found for this namespace.")
+                    log_and_print("INFO", "--- Pod Events (Latest First) ---", "\n📜")
+                    log_and_print("INFO", "No events found for this namespace.", "ℹ")
                 else:
                     sorted_events = sorted(events, key=lambda e: e.metadata.creation_timestamp, reverse=True)
 
-                    logging.info("\n--- Pod Events (Latest First) ---")
+                    log_and_print("INFO", "--- Pod Events (Latest First) ---", "\n📜")
                     for event in sorted_events[:10]:  # Show last 10 events if available
-                        logging.info(f"[{event.type}] {event.reason}: {event.message}")
+                        log_and_print("INFO", f"[{event.type}] {event.reason}: {event.message}")
 
             except client.exceptions.ApiException as e:
-                logging.error(f"\nError retrieving pod events: {e.reason}")
+                log_and_print("ERROR", f"Error retrieving pod events: {e.reason}", "\n❌")
             except Exception as e:
-                logging.error(f"\nUnexpected error retrieving pod events: {e}")
+                log_and_print("ERROR", f"Unexpected error retrieving pod events: {e}", "\n❌")
 
             # 5️⃣ CHECK POD RESOURCE USAGE (Only if --pod is enabled)
-            logging.info("\n--- Pod Resource Usage ---")
+            log_and_print("INFO", "--- Pod Resource Usage ---", "\n📊")
 
             # Get max pod name length for alignment
             max_pod_name_length = max(len(pod.metadata.name) for pod in related_pods) if related_pods else 0
@@ -219,10 +253,10 @@ def diagnose_deployment(deployment, namespace=None, pod_diagnostics=False):
                     limits = container.resources.limits or {}
                     pod_name = pod.metadata.name.ljust(padding)  # Align pod names dynamically
 
-                    logging.info(f"Pod: {pod_name} CPU Request: {requests.get('cpu', 'Not Set')} | Memory Request: {requests.get('memory', 'Not Set')}")
-                    logging.info(f"{' ' * (padding + 5)} CPU Limit: {limits.get('cpu', 'Not Set')} | Memory Limit: {limits.get('memory', 'Not Set')}")
+                    log_and_print("INFO", f"Pod: {pod_name} CPU Request: {requests.get('cpu', 'Not Set')} | Memory Request: {requests.get('memory', 'Not Set')}", "🔹")
+                    log_and_print("INFO", f"{' ' * (padding + 5)} CPU Limit: {limits.get('cpu', 'Not Set')} | Memory Limit: {limits.get('memory', 'Not Set')}")
 
     except client.exceptions.ApiException as e:
-        logging.error(f"Error diagnosing deployment: {e.reason}")
+        log_and_print("ERROR", f"Error diagnosing deployment: {e.reason}", "❌")
     except Exception as e:
-        logging.error(f"Unexpected error: {e}")
+        log_and_print("ERROR", f"Unexpected error: {e}", "❌")

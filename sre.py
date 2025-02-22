@@ -3,21 +3,25 @@ import logging
 import sys
 from kube_utils import list_deployments, scale_deployment, get_deployment_info, diagnose_deployment
 
-# Logging setup
-LOG_FILE = "sre_cli.log"
+# Global variable to enable or disable logging
+LOG_MODE = "--log" in sys.argv
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),  # Log file supports UTF-8
-        logging.StreamHandler(sys.stdout)  # Force UTF-8 output in console
-    ]
-)
+# Logging setup (Only logs if log mode is enabled)
+LOG_FILE = "sre_cli.log"
+if LOG_MODE:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(LOG_FILE, encoding="utf-8"),  # Log to file
+            logging.StreamHandler(sys.stdout)  # Print logs to console
+        ]
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description="SRE CLI for Kubernetes")
+    parser.add_argument("--log", action="store_true", help="Enable logging (logs to file and prints logs)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # List Deployments
@@ -45,7 +49,8 @@ def main():
     args = parser.parse_args()
 
     # Execute the corresponding function
-    logging.info(f"Executing command: {args.command} with args: {args}")
+    if LOG_MODE:
+        logging.info(f"Executing command: {args.command} with args: {args}")
 
     try:
         if args.command == "list":
@@ -59,7 +64,10 @@ def main():
         else:
             parser.print_help()
     except Exception as e:
-        logging.error(f"Unexpected error: {e}", exc_info=True)
+        if LOG_MODE:
+            logging.error(f"Unexpected error: {e}", exc_info=True)
+        else:
+            print(f"❌ Unexpected error: {e}")
 
 
 if __name__ == "__main__":
