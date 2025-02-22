@@ -1,6 +1,8 @@
 import argparse
 import logging
 import sys
+
+import argcomplete
 from kube_utils import list_deployments, scale_deployment, get_deployment_info, diagnose_deployment
 
 # Logging setup
@@ -10,11 +12,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),  # Log file supports UTF-8
-        logging.StreamHandler(sys.stdout)  # Force UTF-8 output in console
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout)
     ]
 )
-
 
 def main():
     parser = argparse.ArgumentParser(description="SRE CLI for Kubernetes")
@@ -41,6 +42,9 @@ def main():
     diagnostic_parser.add_argument("--namespace", help="Namespace of the deployment", default=None)
     diagnostic_parser.add_argument("--pod", help="Get detailed pod diagnostics", action="store_true")
 
+    # Enable Auto-Completion
+    argcomplete.autocomplete(parser)
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -60,7 +64,6 @@ def main():
             parser.print_help()
     except Exception as e:
         logging.error(f"Unexpected error: {e}", exc_info=True)
-
 
 if __name__ == "__main__":
     main()
