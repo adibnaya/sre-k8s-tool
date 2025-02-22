@@ -38,11 +38,12 @@ def log_and_print(level, message, icon=""):
 
     if LOG_MODE:
         # In log mode, log everything and print logs instead of normal output
-        match level:
-            case "INFO" | "WARNING" | "ERROR":
-                getattr(logging, level.lower())(log_message)
-            case _:
-                logging.debug(f"Unknown log level: {log_message}")
+        if level == "INFO":
+            logging.info(log_message)
+        elif level == "WARNING":
+            logging.warning(log_message)
+        elif level == "ERROR":
+            logging.error(log_message)
     else:
         # Normal mode: Print messages with icons, but do not log to file
         print(f"{icon}  {message}")
