@@ -255,7 +255,7 @@ def diagnose_deployment(deployment, namespace=None, pod_diagnostics=False):
                     pod_name = pod.metadata.name.ljust(padding)  # Align pod names dynamically
 
                     log_and_print("INFO", f"Pod: {pod_name} CPU Request: {requests.get('cpu', 'Not Set')} | Memory Request: {requests.get('memory', 'Not Set')}", "🔹")
-                    log_and_print("INFO", f"{' ' * (padding + 5)} CPU Limit: {limits.get('cpu', 'Not Set')} | Memory Limit: {limits.get('memory', 'Not Set')}")
+                    log_and_print("INFO", f"{' ' * (padding + (5 if LOG_MODE else 7))} CPU Limit: {limits.get('cpu', 'Not Set')} | Memory Limit: {limits.get('memory', 'Not Set')}")
 
     except client.exceptions.ApiException as e:
         log_and_print("ERROR", f"Error diagnosing deployment: {e.reason}", "❌")
