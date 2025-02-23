@@ -1,5 +1,7 @@
 # SRE CLI for Kubernetes
 
+![example](example.gif)
+
 ## Overview
 SRE CLI is a command-line tool for managing and diagnosing Kubernetes deployments. It provides functionality to list deployments, scale them, retrieve deployment details, and diagnose issues within a cluster. Logging can be enabled with `--log` to capture execution details.
 
